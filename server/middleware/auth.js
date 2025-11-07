@@ -1,6 +1,6 @@
+// middleware/auth.js
 const jwt = require('jsonwebtoken');
 
-// This function verifies the token and sets req.user.
 const auth = (req, res, next) => {
   const token = req.header('Authorization')?.replace('Bearer ', '');
   if (!token) {
@@ -9,19 +9,21 @@ const auth = (req, res, next) => {
 
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = decoded; // Assign the entire decoded object (e.g., { id, role, iat, exp })
+    // Normalize: always set req.user.id
+    req.user = {
+      id: decoded.id || decoded._id,  // ← fallback to _id if id missing
+      role: decoded.role
+    };
     next();
   } catch (error) {
     res.status(401).json({ message: 'Token is not valid.' });
   }
 };
 
-// This function checks if the user is a vendor.
 const authorizeVendor = (req, res, next) => {
-  if (req.user && req.user.role === 'vendor') {
-    next(); // User is a vendor, proceed.
+  if (req.user?.role === 'vendor') {
+    next();
   } else {
-    // If req.user doesn't exist or role is wrong, deny access.
     return res.status(403).json({ message: 'Forbidden: Vendor access required.' });
   }
 };

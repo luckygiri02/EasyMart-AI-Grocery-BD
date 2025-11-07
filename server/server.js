@@ -13,6 +13,7 @@ const brandRoutes = require('./routes/brandRoutes');
 const { GridFSBucket } = require('mongodb');
 const mongoose = require('mongoose');
 const aiService = require('./aiService');
+const cartRoutes = require('./routes/cartRoutes');
 
 let gridFSBucket;
 
@@ -69,6 +70,9 @@ const startServer = async () => {
     app.use('/api/categories', categoryRoutes);
     app.use('/api/brands', brandRoutes);
     app.use('/api/deals', dealRoutes);
+    // after other routes
+
+app.use('/api/cart', cartRoutes);
 
     app.get('/', (req, res) => {
       res.send('EasyMart Backend is running with Gemma 3 4B via OpenRouter');
