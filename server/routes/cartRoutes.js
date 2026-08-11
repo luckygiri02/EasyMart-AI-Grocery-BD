@@ -4,7 +4,7 @@ const router = express.Router();
 const Cart = require('../models/Cart');
 const Product = require('../models/Product');
 const { auth } = require('../middleware/auth');
-
+const Vendor = require('../models/Vender');
 
 // POPULATE CONFIG
 const CART_POPULATE = [
@@ -18,10 +18,39 @@ const CART_POPULATE = [
 // GET /api/cart
 router.get('/', auth, async (req, res) => {
   try {
-    const cart = await Cart.findOne({ userId: req.user.id });
+    let cart = await Cart.findOne({ userId: req.user.id });
     if (!cart) return res.json({ items: [], total: 0 });
 
-    await cart.populate(CART_POPULATE);  // ← CORRECT
+    await cart.populate({
+      path: 'items.productId',
+      populate: { path: 'vendorId', select: 'name' }
+    });
+
+    // 🔥 FETCH VENDORS
+    const vendorIds = cart.items.map(i => i.productId.vendorId?._id);
+
+    const vendors = await Vendor.find({ userId: { $in: vendorIds } });
+
+    // 🔥 MAP VENDOR DATA
+    cart.items = cart.items.map(item => {
+      const product = item.productId;
+
+      const vendor = vendors.find(
+        v => v.userId.toString() === product.vendorId?._id.toString()
+      );
+
+      return {
+        ...item.toObject(),
+        productId: {
+          ...product.toObject(),
+          vendorDetails: {
+            name: product.vendorId?.name,
+            storeName: vendor?.storeName,
+            phone: vendor?.phone
+          }
+        }
+      };
+    });
 
     const total = cart.items.reduce(
       (sum, i) => sum + i.priceAtAdd * i.quantity,
@@ -29,8 +58,9 @@ router.get('/', auth, async (req, res) => {
     );
 
     res.json({ items: cart.items, total });
+
   } catch (err) {
-    console.error('GET /api/cart error →', err);
+    console.error(err);
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -55,7 +85,7 @@ router.post('/add', auth, async (req, res) => {
     }
 
     await cart.save();
-    await cart.populate(CART_POPULATE);  // ← CORRECT
+    await cart.populate(CART_POPULATE);
 
     const total = cart.items.reduce((s, i) => s + i.priceAtAdd * i.quantity, 0);
     res.json({ items: cart.items, total });
@@ -82,7 +112,7 @@ router.put('/update', auth, async (req, res) => {
 
     cart.items[idx].quantity = quantity;
     await cart.save();
-    await cart.populate(CART_POPULATE);  // ← CORRECT
+    await cart.populate(CART_POPULATE);
 
     const total = cart.items.reduce((s, i) => s + i.priceAtAdd * i.quantity, 0);
     res.json({ items: cart.items, total });
@@ -100,12 +130,28 @@ router.delete('/remove/:productId', auth, async (req, res) => {
 
     cart.items = cart.items.filter(i => i.productId.toString() !== req.params.productId);
     await cart.save();
-    await cart.populate(CART_POPULATE);  // ← CORRECT
+    await cart.populate(CART_POPULATE);
 
     const total = cart.items.reduce((s, i) => s + i.priceAtAdd * i.quantity, 0);
     res.json({ items: cart.items, total });
   } catch (err) {
     console.error('DELETE /api/cart/remove error →', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// DELETE /api/cart/clear  ✅ NEW ROUTE
+router.delete('/clear', auth, async (req, res) => {
+  try {
+    const cart = await Cart.findOne({ userId: req.user.id });
+    if (!cart) return res.json({ items: [], total: 0 });
+
+    cart.items = [];
+    await cart.save();
+
+    res.json({ items: [], total: 0 });
+  } catch (err) {
+    console.error('DELETE /api/cart/clear error →', err);
     res.status(500).json({ message: 'Server error' });
   }
 });

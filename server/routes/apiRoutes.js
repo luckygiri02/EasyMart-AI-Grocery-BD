@@ -1,23 +1,20 @@
-const express = require('express');
-const { Category, Brand } = require('../models');
+const express = require("express");
 const router = express.Router();
 
-router.get('/categories', async (req, res) => {
-  try {
-    const categories = await Category.find();
-    res.json(categories);
-  } catch (err) {
-    res.status(500).json({ message: 'Error fetching categories', error: err.message });
-  }
-});
+const aiController = require("../aiService");
 
-router.get('/brands', async (req, res) => {
-  try {
-    const brands = await Brand.find();
-    res.json(brands);
-  } catch (err) {
-    res.status(500).json({ message: 'Error fetching brands', error: err.message });
-  }
-});
+// OLD endpoints
+router.post("/description", aiController.generateDescription);
+router.post("/recommendations", aiController.generateRecommendations);
+router.post("/search", aiController.generateSearch);
+
+// NEW meal plan endpoint
+router.post("/meal-plan", aiController.generateMealPlan);
+
+// extra test endpoint
+router.get("/test", aiController.testAI);
+
+// clear cache
+router.delete("/clear-cache", aiController.clearCache);
 
 module.exports = router;

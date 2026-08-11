@@ -1,268 +1,713 @@
-const axios = require('axios');
-const { GridFSBucket } = require('mongodb');
-const mongoose = require('mongoose');
+// 📁 server/aiService.js
 
-// Cache to reduce API calls
+const {
+  GoogleGenerativeAI
+} = require("@google/generative-ai");
+
+
+/* =========================================================
+   GEMINI SETUP
+========================================================= */
+
+const genAI =
+  new GoogleGenerativeAI(
+    process.env.GEMINI_API_KEY
+  );
+
+
+const model =
+  genAI.getGenerativeModel({
+
+    model:
+      "gemini-2.0-flash"
+  });
+
+
+/* =========================================================
+   CACHE SYSTEM
+========================================================= */
+
 const aiCache = new Map();
-const CACHE_DURATION = 10 * 60 * 1000; // 10 minutes
 
-// OpenRouter API configuration (moved to environment variables)
-const OPENROUTER_API_URL = process.env.OPENROUTER_API_URL || 'https://openrouter.ai/api/v1/chat/completions';
-const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
+const CACHE_DURATION =
+  10 * 60 * 1000;
 
-// Initialize GridFSBucket (to be set by server.js after connection)
-let gridFSBucket = null;
 
-const setGridFSBucket = (bucket) => {
-  gridFSBucket = bucket;
-};
+/* =========================================================
+   GEMINI REQUEST
+========================================================= */
 
-const generateWithGemma = async (prompt, cacheKey = null) => {
-  // Check cache first
-  if (cacheKey && aiCache.has(cacheKey)) {
-    const cached = aiCache.get(cacheKey);
-    if (Date.now() - cached.timestamp < CACHE_DURATION) {
-      console.log('Using cached AI response for:', cacheKey);
-      return cached.response;
-    }
-  }
+const askGemini = async (
+  prompt,
+  cacheKey = null
+) => {
 
   try {
-    console.log('Making request to Gemma 3 4B via OpenRouter with prompt:', prompt.substring(0, 100) + '...');
 
-    const response = await axios.post(OPENROUTER_API_URL, {
-      model: 'google/gemma-3-4b-it:free',
-      messages: [
-        {
-          role: 'user',
-          content: prompt
-        }
-      ],
-      max_tokens: 150,
-      temperature: 0.7
-    }, {
-      headers: {
-        'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
-        'Content-Type': 'application/json',
-        'HTTP-Referer': 'http://localhost:5000',
-        'X-Title': 'EasyMart Grocery Store'
+    /* =========================
+       CACHE CHECK
+    ========================= */
+
+    if (
+      cacheKey &&
+      aiCache.has(cacheKey)
+    ) {
+
+      const cached =
+        aiCache.get(cacheKey);
+
+      if (
+        Date.now() -
+          cached.timestamp <
+        CACHE_DURATION
+      ) {
+
+        console.log(
+          "⚡ Using Cached AI Response"
+        );
+
+        return cached.response;
       }
-    });
+    }
 
-    const generatedText = response.data.choices[0].message.content.trim();
 
-    // Cache the response
+    /* =========================
+       GEMINI CALL
+    ========================= */
+
+    const result =
+      await model.generateContent(
+        prompt
+      );
+
+    const response =
+      await result.response;
+
+    const text =
+      response.text();
+
+
+    /* =========================
+       SAVE CACHE
+    ========================= */
+
     if (cacheKey) {
+
       aiCache.set(cacheKey, {
-        response: generatedText,
-        timestamp: Date.now()
+
+        response: text,
+
+        timestamp:
+          Date.now()
       });
     }
 
-    return generatedText;
-  } catch (error) {
-    console.error('OpenRouter Gemma 3 4B API error:', error.response?.data || error.message);
-    throw error;
+    return text;
+
+  } catch (err) {
+
+    console.log(
+      "Gemini Error:",
+      err.message
+    );
+
+    return JSON.stringify({
+
+      mealName:
+        "Healthy Veg Meal",
+
+      mealDescription:
+        "Healthy grocery-based meal.",
+
+      items: [
+        "Rice",
+        "Tomato",
+        "Onion",
+        "Potato",
+        "Salt",
+        "Oil",
+        "Turmeric",
+        "Vegetables"
+      ]
+    });
   }
 };
 
-// Fallback description generator
-function generateFallbackDescription(productName, category) {
-  const descriptors = {
-    'vegetables': ['Fresh', 'Organic', 'Crisp', 'Nutritious', 'Farm-fresh'],
-    'fruits': ['Juicy', 'Sweet', 'Ripe', 'Vitamin-rich', 'Seasonal'],
-    'dairy': ['Creamy', 'Fresh', 'Pure', 'High-quality', 'Farm-fresh'],
-    'bakery': ['Freshly baked', 'Artisanal', 'Crusty', 'Soft', 'Homemade'],
-    'beverages': ['Refreshing', 'Cold', 'Sparkling', 'Natural', 'Healthy'],
-    'snacks': ['Crunchy', 'Tasty', 'Savory', 'Delicious', 'Satisfying'],
-    'default': ['Premium', 'Quality', 'Excellent', 'Delicious', 'Perfect']
-  };
 
-  const benefits = {
-    'vegetables': ['perfect for cooking', 'great for salads', 'ideal for healthy meals'],
-    'fruits': ['perfect for snacking', 'great for desserts', 'ideal for smoothies'],
-    'dairy': ['perfect for cooking', 'great for breakfast', 'ideal for baking'],
-    'bakery': ['perfect with tea', 'great for breakfast', 'ideal for sandwiches'],
-    'beverages': ['perfect refreshment', 'great thirst quencher', 'ideal for any time'],
-    'snacks': ['perfect for munching', 'great for parties', 'ideal for movie nights'],
-    'default': ['perfect for your needs', 'great for any occasion', 'ideal for your family']
-  };
+/* =========================================================
+   HELPERS
+========================================================= */
 
-  const categoryKey = category.toLowerCase();
-  const descList = descriptors[categoryKey] || descriptors.default;
-  const benefitList = benefits[categoryKey] || benefits.default;
+function safeJSONParse(text) {
 
-  const randomDesc = descList[Math.floor(Math.random() * descList.length)];
-  const randomBenefit = benefitList[Math.floor(Math.random() * benefitList.length)];
+  try {
 
-  return `${randomDesc} ${productName} - ${randomBenefit}`;
+    return JSON.parse(text);
+
+  } catch (err) {
+
+    const match =
+      text.match(/\{[\s\S]*\}/);
+
+    if (match) {
+
+      try {
+
+        return JSON.parse(
+          match[0]
+        );
+
+      } catch {
+
+        return null;
+      }
+    }
+
+    return null;
+  }
 }
 
-// AI Endpoints
-const generateDescription = async (req, res) => {
-  try {
-    const { productName, category } = req.body;
 
-    if (!productName || !category) {
-      return res.status(400).json({
-        error: 'Missing required parameters: productName and category are required'
+const NON_FOOD_KEYWORDS = [
+
+  "soap",
+  "detergent",
+  "dishwash",
+  "cleaner",
+  "shampoo",
+  "toothpaste",
+  "facewash",
+  "sanitizer",
+  "cream",
+  "perfume"
+];
+
+
+const normalizeText = (
+  text
+) => {
+
+  return text
+    .toLowerCase()
+    .replace(
+      /[^a-z0-9\s]/g,
+      ""
+    )
+    .trim();
+};
+
+
+const isMatched = (
+  ingredient,
+  productName
+) => {
+
+  const ing =
+    normalizeText(
+      ingredient
+    );
+
+  const prod =
+    normalizeText(
+      productName
+    );
+
+  if (
+    !ing ||
+    !prod
+  ) return false;
+
+  if (
+    prod.includes(ing)
+  ) return true;
+
+  if (
+    ing.includes(prod)
+  ) return true;
+
+  return false;
+};
+
+
+/* =========================================================
+   DESCRIPTION
+========================================================= */
+
+const generateDescription =
+  async (req, res) => {
+
+    try {
+
+      const {
+        productName,
+        category
+      } = req.body;
+
+      const prompt = `
+Generate a short grocery product description.
+
+Product:
+${productName}
+
+Category:
+${category}
+
+Keep under 120 characters.
+`;
+
+      const response =
+        await askGemini(
+          prompt,
+          `desc:${productName}`
+        );
+
+      res.json({
+        content: response
+      });
+
+    } catch (err) {
+
+      res.json({
+
+        content:
+          `Fresh ${req.body.productName}`
       });
     }
+  };
 
-    const cacheKey = `desc:${productName}:${category}`;
 
-    try {
-      const prompt = `Generate a short, appealing description (under 150 characters) for a grocery product called "${productName}" in the "${category}" category. Return only the description text without any additional formatting or explanations.`;
+/* =========================================================
+   RECOMMENDATIONS
+========================================================= */
 
-      const description = await generateWithGemma(prompt, cacheKey);
-      res.json({ content: description });
-    } catch (apiError) {
-      console.log('Using fallback description generator');
-      const description = generateFallbackDescription(productName, category);
-      res.json({ content: description });
-    }
-  } catch (error) {
-    console.error('Description generation error:', error);
-    const description = generateFallbackDescription(req.body.productName, req.body.category);
-    res.json({ content: description });
-  }
-};
-
-const generateRecommendations = async (req, res) => {
-  try {
-    const { products, userId } = req.body;
-
-    if (!products || !Array.isArray(products)) {
-      return res.status(400).json({ error: 'Products array is required' });
-    }
-
-    const cacheKey = `rec:${userId}:${products.length}`;
+const generateRecommendations =
+  async (req, res) => {
 
     try {
-      const productList = products.slice(0, 20).map(p => p.name).join(', ');
-      const prompt = `As a grocery store recommendation system, suggest 4-6 complementary products from this list: ${productList}. 
-      Return ONLY a JSON array of product names in this exact format: ["Product Name 1", "Product Name 2", "Product Name 3"]`;
 
-      const response = await generateWithGemma(prompt, cacheKey);
+      const {
+        products
+      } = req.body;
 
-      const jsonMatch = response.match(/\[[^\]]*\]/);
-      if (jsonMatch) {
-        try {
-          const recommendedNames = JSON.parse(jsonMatch[0]);
-          const recommendedProducts = products.filter(p =>
-            recommendedNames.some(name => p.name.toLowerCase().includes(name.toLowerCase()))
-          ).slice(0, 6);
+      if (
+        !products ||
+        !Array.isArray(products)
+      ) {
 
-          return res.json({ content: JSON.stringify(recommendedProducts.map(p => p._id)) });
-        } catch (parseError) {
-          console.error('JSON parse error:', parseError);
-        }
+        return res.status(400)
+          .json({
+            error:
+              "Products required"
+          });
       }
-    } catch (apiError) {
-      console.log('Using fallback recommendations');
-    }
 
-    const recommendedProducts = products
-      .filter(p => p.isActive)
-      .sort(() => 0.5 - Math.random())
-      .slice(0, 6)
-      .map(p => p._id);
 
-    res.json({ content: JSON.stringify(recommendedProducts) });
-  } catch (error) {
-    console.error('Recommendations error:', error);
-    const recommendedProducts = req.body.products
-      .filter(p => p.isActive)
-      .sort(() => 0.5 - Math.random())
-      .slice(0, 6)
-      .map(p => p._id);
+      const productList =
+        products
+          .slice(0, 20)
+          .map(p => p.name)
+          .join(", ");
 
-    res.json({ content: JSON.stringify(recommendedProducts) });
-  }
-};
 
-const generateSearch = async (req, res) => {
-  try {
-    const { query, products } = req.body;
+      const prompt = `
+Suggest 5 grocery products
+from this list:
 
-    if (!query || !products) {
-      return res.status(400).json({ error: 'Query and products are required' });
-    }
+${productList}
 
-    const cacheKey = `search:${query}:${products.length}`;
+Return only JSON array.
+`;
 
-    try {
-      const productList = products.slice(0, 30).map(p => p.name).join(', ');
-      const prompt = `Find grocery products related to the search query: "${query}". 
-      Available products: ${productList}. 
-      Return ONLY a JSON array of matching product names in this exact format: ["Product Name 1", "Product Name 2"]`;
 
-      const response = await generateWithGemma(prompt, cacheKey);
+      const response =
+        await askGemini(
+          prompt,
+          `rec:${productList}`
+        );
 
-      const jsonMatch = response.match(/\[[^\]]*\]/);
+
+      const jsonMatch =
+        response.match(
+          /\[[^\]]*\]/
+        );
+
+
       if (jsonMatch) {
-        try {
-          const matchingNames = JSON.parse(jsonMatch[0]);
-          const matchingProducts = products.filter(p =>
-            matchingNames.some(name => p.name.toLowerCase().includes(name.toLowerCase()))
+
+        const names =
+          JSON.parse(
+            jsonMatch[0]
           );
 
-          return res.json({ content: JSON.stringify(matchingProducts.map(p => p._id)) });
-        } catch (parseError) {
-          console.error('JSON parse error:', parseError);
-        }
+        const matched =
+          products.filter(p =>
+
+            names.some(name =>
+
+              p.name
+                .toLowerCase()
+                .includes(
+                  name.toLowerCase()
+                )
+            )
+          );
+
+        return res.json({
+
+          content:
+            JSON.stringify(
+              matched.map(
+                p => p._id
+              )
+            )
+        });
       }
-    } catch (apiError) {
-      console.log('Using fallback search');
+
+
+      return res.json({
+
+        content:
+          JSON.stringify([])
+      });
+
+    } catch (err) {
+
+      res.status(500).json({
+
+        error:
+          "Recommendation failed"
+      });
     }
+  };
 
-    const matchingProducts = products.filter(product =>
-      product.name.toLowerCase().includes(query.toLowerCase()) ||
-      (product.description && product.description.toLowerCase().includes(query.toLowerCase()))
-    );
 
-    res.json({ content: JSON.stringify(matchingProducts.map(p => p._id)) });
-  } catch (error) {
-    console.error('Search error:', error);
-    const matchingProducts = req.body.products.filter(product =>
-      product.name.toLowerCase().includes(req.body.query.toLowerCase()) ||
-      (product.description && product.description.toLowerCase().includes(req.body.query.toLowerCase()))
-    );
+/* =========================================================
+   SMART SEARCH
+========================================================= */
 
-    res.json({ content: JSON.stringify(matchingProducts.map(p => p._id)) });
-  }
-};
+const generateSearch =
+  async (req, res) => {
 
-const testAI = async (req, res) => {
-  try {
-    const prompt = "Hello, are you working? Respond briefly.";
-    const response = await generateWithGemma(prompt);
+    try {
+
+      const {
+        query,
+        products
+      } = req.body;
+
+      const matched =
+        products.filter(product =>
+
+          product.name
+            .toLowerCase()
+            .includes(
+              query.toLowerCase()
+            )
+        );
+
+      res.json({
+
+        content:
+          JSON.stringify(
+            matched.map(
+              p => p._id
+            )
+          )
+      });
+
+    } catch (err) {
+
+      res.status(500).json({
+
+        error:
+          "Search failed"
+      });
+    }
+  };
+
+
+/* =========================================================
+   MEAL PLANNER
+========================================================= */
+
+const generateMealPlan =
+  async (req, res) => {
+
+    try {
+
+      const {
+        query,
+        products
+      } = req.body;
+
+      if (!query) {
+
+        return res.status(400)
+          .json({
+
+            error:
+              "Query required"
+          });
+      }
+
+
+      const productNames =
+        (products || [])
+          .map(p => p.name)
+          .slice(0, 80);
+
+
+      const randomSeed =
+        Math.floor(
+          Math.random() * 99999
+        );
+
+
+      const prompt = `
+You are an AI Meal Planner.
+
+User wants:
+"${query}"
+
+IMPORTANT:
+- Suggest unique dishes
+- Only food items
+- No soap/detergent
+- Give 8-12 ingredients
+
+Return JSON:
+
+{
+  "mealName":"Dish",
+  "mealDescription":"Description",
+  "items":["item1","item2"]
+}
+
+Random:
+${randomSeed}
+`;
+
+
+      let aiResponse = "";
+
+
+      try {
+
+        aiResponse =
+          await askGemini(
+            prompt
+          );
+
+      } catch (err) {
+
+        console.log(err);
+
+        aiResponse =
+          JSON.stringify({
+
+            mealName:
+              "Healthy Veg Meal",
+
+            mealDescription:
+              "Healthy grocery meal.",
+
+            items: [
+              "Rice",
+              "Tomato",
+              "Onion",
+              "Salt",
+              "Oil"
+            ]
+          });
+      }
+
+
+      let parsed =
+        safeJSONParse(
+          aiResponse
+        );
+
+
+      if (
+        !parsed ||
+        !parsed.items
+      ) {
+
+        parsed = {
+
+          mealName:
+            "Healthy Veg Meal",
+
+          mealDescription:
+            "Healthy grocery-based meal.",
+
+          items: [
+            "Rice",
+            "Tomato",
+            "Onion",
+            "Potato",
+            "Salt",
+            "Oil"
+          ]
+        };
+      }
+
+
+      /* =========================
+         FILTER NON FOOD
+      ========================= */
+
+      parsed.items =
+        parsed.items.filter(item => {
+
+          const check =
+            normalizeText(item);
+
+          return !NON_FOOD_KEYWORDS
+            .some(bad =>
+
+              check.includes(bad)
+            );
+        });
+
+
+      /* =========================
+         PRODUCT MATCHING
+      ========================= */
+
+      const availableItems =
+        [];
+
+      const missingItems =
+        [];
+
+
+      parsed.items.forEach(
+        ingredient => {
+
+          const found =
+            productNames.some(
+              prodName =>
+
+                isMatched(
+                  ingredient,
+                  prodName
+                )
+            );
+
+          if (found) {
+
+            availableItems.push(
+              ingredient
+            );
+
+          } else {
+
+            missingItems.push(
+              ingredient
+            );
+          }
+        }
+      );
+
+
+      parsed.availableItems =
+        availableItems;
+
+      parsed.missingItems =
+        missingItems;
+
+
+      return res.json({
+
+        content:
+          JSON.stringify(parsed)
+      });
+
+    } catch (err) {
+
+      console.log(
+        "Meal Plan Error:",
+        err.message
+      );
+
+      res.status(500).json({
+
+        error:
+          "Meal planner failed"
+      });
+    }
+  };
+
+
+/* =========================================================
+   TEST AI
+========================================================= */
+
+const testAI =
+  async (req, res) => {
+
+    try {
+
+      const response =
+        await askGemini(
+          "Say hello in one line."
+        );
+
+      res.json({
+
+        success: true,
+
+        response
+      });
+
+    } catch (err) {
+
+      res.status(500).json({
+
+        success: false,
+
+        error:
+          err.message
+      });
+    }
+  };
+
+
+/* =========================================================
+   CLEAR CACHE
+========================================================= */
+
+const clearCache =
+  (req, res) => {
+
+    aiCache.clear();
 
     res.json({
+
       success: true,
-      message: 'Gemma 3 4B via OpenRouter connection successful',
-      response: response
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error.message,
-      details: 'Check your OpenRouter API key and internet connection'
-    });
-  }
-};
 
-const clearCache = (req, res) => {
-  aiCache.clear();
-  res.json({ success: true, message: 'Cache cleared' });
-};
+      message:
+        "AI cache cleared"
+    });
+  };
 
-// Export all AI functions
+
+/* =========================================================
+   EXPORTS
+========================================================= */
+
 module.exports = {
-  setGridFSBucket,
+
   generateDescription,
+
   generateRecommendations,
+
   generateSearch,
+
+  generateMealPlan,
+
   testAI,
+
   clearCache
 };

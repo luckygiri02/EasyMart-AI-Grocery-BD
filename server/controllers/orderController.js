@@ -1,167 +1,927 @@
-const { Order, Product } = require('../models/Product');
-const User = require('../models/User');
+const Order = require("../models/Order");
+const Product = require("../models/Product");
+const User = require("../models/User");
+const Cart = require("../models/Cart");
 
-// Create a new order
-const createOrder = async (req, res) => {
+const mongoose = require("mongoose");
+
+
+/* =========================================
+   CREATE ORDER
+========================================= */
+
+exports.createOrder = async (
+  req,
+  res
+) => {
+
   try {
-    const { products, shippingAddress, paymentMethod, deliveryInstructions, deliveryTimeSlot, orderSource, discount } = req.body;
 
-    // Validate required fields
-    if (!products || !products.length || !shippingAddress || !paymentMethod) {
-      return res.status(400).json({ message: 'Products, shippingAddress, and paymentMethod are required' });
-    }
+    const {
 
-    // Validate userId (from authenticated user)
-    const userId = req.user?.id;
-    if (!userId) {
-      return res.status(401).json({ message: 'User authentication required' });
-    }
-    const user = await User.findById(userId);
-    if (!user || user.role !== 'user') {
-      return res.status(400).json({ message: 'Invalid or non-customer user' });
-    }
+      products,
 
-    // Validate products and calculate totalAmount
-    let totalAmount = 0;
-    const validatedProducts = [];
-    for (const item of products) {
-      const product = await Product.findById(item.productId);
-      if (!product || !product.isActive || product.stock < item.quantity) {
-        return res.status(400).json({ message: `Invalid or unavailable product: ${item.productId}` });
-      }
-      const vendor = await User.findById(product.vendorId);
-      if (!vendor || vendor.role !== 'vendor') {
-        return res.status(400).json({ message: `Invalid vendor for product: ${item.productId}` });
-      }
-      validatedProducts.push({
-        productId: item.productId,
-        quantity: item.quantity,
-        priceAtPurchase: product.price,
-        vendorId: product.vendorId
+      shippingAddress,
+
+      addressId,
+
+      paymentMethod,
+
+      deliveryInstructions,
+
+      deliveryTimeSlot,
+
+      orderSource,
+
+      discount,
+
+    } = req.body;
+
+
+    /* =========================================
+       VALIDATION
+    ========================================= */
+
+    if (
+      !products ||
+      products.length === 0
+    ) {
+
+      return res.status(400).json({
+        message:
+          "Products required",
       });
-      totalAmount += product.price * item.quantity;
     }
 
-    // Apply discount if provided
-    if (discount && discount.amount) {
-      totalAmount = Math.max(0, totalAmount - discount.amount);
+
+    if (!paymentMethod) {
+
+      return res.status(400).json({
+        message:
+          "Payment method required",
+      });
     }
 
-    // Validate shippingAddress
-    const { street, city, state, zipCode, country } = shippingAddress;
-    if (!street || !city || !state || !zipCode || !country) {
-      return res.status(400).json({ message: 'Complete shipping address is required' });
+
+    /* =========================================
+       USER
+    ========================================= */
+
+    const user =
+      await User.findById(
+        req.user.id
+      );
+
+    if (!user) {
+
+      return res.status(404).json({
+        message:
+          "User not found",
+      });
     }
 
-    // Validate paymentMethod
-    if (!['credit_card', 'debit_card', 'upi', 'cash_on_delivery'].includes(paymentMethod)) {
-      return res.status(400).json({ message: 'Invalid payment method' });
+
+    /* =========================================
+       ADDRESS
+    ========================================= */
+
+    let finalShippingAddress;
+
+
+    // Saved address
+
+    if (addressId) {
+
+      const addr =
+        user.addresses.id(
+          addressId
+        );
+
+      if (!addr) {
+
+        return res.status(400).json({
+          message:
+            "Address not found",
+        });
+      }
+
+      finalShippingAddress = {
+
+        street:
+          addr.street,
+
+        city:
+          addr.city,
+
+        state:
+          addr.state,
+
+        zipCode:
+          addr.postalCode,
+
+        country:
+          addr.country,
+
+        phone:
+          addr.phone,
+      };
+
+    } else {
+
+      const {
+
+        street,
+
+        city,
+
+        state,
+
+        zipCode,
+
+      } = shippingAddress;
+
+
+      if (
+        !street ||
+        !city ||
+        !state ||
+        !zipCode
+      ) {
+
+        return res.status(400).json({
+          message:
+            "Complete address required",
+        });
+      }
+
+
+      finalShippingAddress = {
+
+        street,
+
+        city,
+
+        state,
+
+        zipCode,
+
+        country:
+          "India",
+      };
     }
 
-    // Validate deliveryTimeSlot if provided
-    if (deliveryTimeSlot && !['morning', 'afternoon', 'evening'].includes(deliveryTimeSlot)) {
-      return res.status(400).json({ message: 'Invalid delivery time slot' });
+
+    /* =========================================
+       VALIDATE PRODUCTS
+    ========================================= */
+
+    let totalAmount = 0;
+
+    const validatedProducts = [];
+
+
+    for (const item of products) {
+
+      const product =
+        await Product.findById(
+          item.productId
+        );
+
+      if (!product) {
+
+        return res.status(400).json({
+          message:
+            "Invalid product",
+        });
+      }
+
+
+      if (
+        product.stock <
+        item.quantity
+      ) {
+
+        return res.status(400).json({
+          message:
+            `Low stock: ${product.name}`,
+        });
+      }
+
+
+      validatedProducts.push({
+
+        productId:
+          product._id,
+
+        name:
+          product.name,
+
+        image:
+          product.images?.[0] ||
+          null,
+
+        quantity:
+          item.quantity,
+
+        priceAtPurchase:
+          product.price,
+
+        vendorId:
+          product.vendorId,
+
+        unit:
+          product.unit,
+
+        weight:
+          product.weight,
+      });
+
+
+      totalAmount +=
+        product.price *
+        item.quantity;
     }
 
-    // Validate orderSource if provided
-    if (orderSource && !['cart', 'direct', 'subscription'].includes(orderSource)) {
-      return res.status(400).json({ message: 'Invalid order source' });
+
+    /* =========================================
+       DISCOUNT
+    ========================================= */
+
+    if (discount?.amount) {
+
+      totalAmount -=
+        discount.amount;
     }
+
+
+    /* =========================================
+       CREATE ORDER
+    ========================================= */
 
     const order = new Order({
-      userId,
-      products: validatedProducts,
+
+      userId:
+        req.user.id,
+
+      products:
+        validatedProducts,
+
       totalAmount,
-      shippingAddress,
+
+      shippingAddress:
+        finalShippingAddress,
+
       paymentMethod,
-      deliveryInstructions: deliveryInstructions || '',
-      deliveryTimeSlot: deliveryTimeSlot || user.preferences?.preferredDeliveryTime || 'morning',
-      orderSource: orderSource || 'cart',
-      discount: discount || { code: '', amount: 0 },
-      status: 'pending'
+
+      paymentStatus:
+        "pending",
+
+      status:
+        "pending",
+
+      vendorResponse:
+        "pending",
+
+      liveStatus:
+        "Order Placed",
+
+      estimatedDeliveryTime:
+        30,
+
+      aiPredictedDeliveryTime:
+        30,
+
+      priorityLevel:
+        "medium",
+
+      trackingId:
+        `EZM-${Date.now()}`,
+
+      deliveryInstructions,
+
+      deliveryTimeSlot,
+
+      orderSource,
+
+      discount,
     });
 
-    const savedOrder = await order.save();
-    res.status(201).json(savedOrder);
-  } catch (error) {
-    res.status(400).json({ message: error.message });
+
+    await order.save();
+
+
+    /* =========================================
+       CLEAR CART
+    ========================================= */
+
+    await Cart.findOneAndUpdate(
+      {
+        userId:
+          req.user.id,
+      },
+
+      {
+        $set: {
+          items: [],
+        },
+      }
+    );
+
+
+    /* =========================================
+       UPDATE STOCK
+    ========================================= */
+
+    for (const item of validatedProducts) {
+
+      const product =
+        await Product.findById(
+          item.productId
+        );
+
+      product.stock -=
+        item.quantity;
+
+
+      if (
+        product.stock <= 0
+      ) {
+
+        product.stock = 0;
+
+        product.availabilityStatus =
+          "out_of_stock";
+      }
+
+      await product.save();
+    }
+
+
+    /* =========================================
+       RESPONSE
+    ========================================= */
+
+    res.status(201).json({
+
+      success: true,
+
+      message:
+        "Order created successfully",
+
+      order,
+    });
+
+  } catch (err) {
+
+    console.error(
+      "Create Order Error:",
+      err
+    );
+
+    res.status(500).json({
+      message:
+        err.message,
+    });
   }
 };
 
-// Get all orders for a user
-const getUserOrders = async (req, res) => {
+
+/* =========================================
+   USER ORDERS
+========================================= */
+
+exports.getUserOrders = async (
+  req,
+  res
+) => {
+
   try {
-    const userId = req.user?.id;
-    if (!userId) {
-      return res.status(401).json({ message: 'User authentication required' });
-    }
-    const orders = await Order.find({ userId })
-      .populate('products.productId', 'name price images')
-      .populate('products.vendorId', 'name email')
-      .populate('userId', 'name email');
+
+    const orders =
+      await Order.find({
+
+        userId:
+          req.user.id,
+      })
+
+      .sort({
+        createdAt: -1,
+      });
+
     res.json(orders);
-  } catch (error) {
-    res.status(500).json({ message: error.message });
+
+  } catch (err) {
+
+    res.status(500).json({
+      message:
+        err.message,
+    });
   }
 };
 
-// Get order by ID
-const getOrderById = async (req, res) => {
+
+/* =========================================
+   VENDOR ORDERS
+========================================= */
+
+exports.getVendorOrders = async (
+  req,
+  res
+) => {
+
   try {
-    const order = await Order.findById(req.params.id)
-      .populate('products.productId', 'name price images')
-      .populate('products.vendorId', 'name email')
-      .populate('userId', 'name email');
-    if (!order) return res.status(404).json({ message: 'Order not found' });
-    if (order.userId.toString() !== req.user?.id && req.user?.role !== 'admin') {
-      return res.status(403).json({ message: 'Unauthorized access' });
+
+    const vendorId =
+      new mongoose.Types.ObjectId(
+        req.user.id
+      );
+
+
+    const orders =
+      await Order.find({
+
+        "products.vendorId":
+          vendorId,
+
+        paymentStatus:
+          "completed",
+      })
+
+      .populate(
+        "userId",
+        "name phoneNumber"
+      )
+
+      .sort({
+        createdAt: -1,
+      });
+
+
+    res.json(orders);
+
+  } catch (err) {
+
+    console.error(err);
+
+    res.status(500).json({
+      message:
+        "Server error",
+    });
+  }
+};
+
+
+/* =========================================
+   ACCEPT / REJECT ORDER
+========================================= */
+
+exports.respondToOrder = async (
+  req,
+  res
+) => {
+
+  try {
+
+    const { orderId } =
+      req.params;
+
+    const {
+
+      action,
+
+      estimatedTime,
+
+    } = req.body;
+
+
+    const order =
+      await Order.findById(
+        orderId
+      );
+
+    if (!order) {
+
+      return res.status(404).json({
+        message:
+          "Order not found",
+      });
     }
+
+
+    /* =========================================
+       ACCEPT
+    ========================================= */
+
+    if (action === "accept") {
+
+      order.vendorResponse =
+        "accepted";
+
+      order.status =
+        "accepted";
+
+      order.liveStatus =
+        "Preparing";
+
+      order.acceptedAt =
+        new Date();
+
+      order.estimatedDeliveryTime =
+        estimatedTime || 30;
+    }
+
+
+    /* =========================================
+       REJECT
+    ========================================= */
+
+    if (action === "reject") {
+
+      order.vendorResponse =
+        "rejected";
+
+      order.status =
+        "cancelled";
+
+      order.cancelledAt =
+        new Date();
+    }
+
+
+    await order.save();
+
     res.json(order);
-  } catch (error) {
-    if (error.name === 'CastError') return res.status(400).json({ message: 'Invalid order ID format' });
-    res.status(500).json({ message: error.message });
+
+  } catch (err) {
+
+    console.error(err);
+
+    res.status(500).json({
+      message:
+        err.message,
+    });
   }
 };
 
-// Update order status
-const updateOrderStatus = async (req, res) => {
+
+/* =========================================
+   GET ONLINE ORDERS
+========================================= */
+
+exports.getOnlineOrders = async (
+  req,
+  res
+) => {
+
   try {
-    const { status } = req.body;
-    if (!['pending', 'confirmed', 'processing', 'shipped', 'delivered', 'cancelled'].includes(status)) {
-      return res.status(400).json({ message: 'Invalid status' });
+
+    const vendorId =
+      req.user.id;
+
+    const orders =
+      await Order.find({
+
+        "products.vendorId":
+          vendorId,
+
+        vendorResponse:
+          "accepted",
+
+        paymentStatus:
+          "completed",
+      })
+
+      .populate(
+        "userId",
+        "name phoneNumber"
+      )
+
+      .sort({
+        createdAt: -1,
+      });
+
+
+    res.json(orders);
+
+  } catch (err) {
+
+    res.status(500).json({
+      message:
+        err.message,
+    });
+  }
+};
+
+
+/* =========================================
+   GET ORDER BY ID
+========================================= */
+
+exports.getOrderById = async (
+  req,
+  res
+) => {
+
+  try {
+
+    const order =
+      await Order.findById(
+        req.params.id
+      )
+
+      .populate(
+        "userId",
+        "name phoneNumber"
+      )
+
+      .populate({
+
+        path:
+          "products.productId",
+
+        select:
+          "name price images description",
+      });
+
+
+    if (!order) {
+
+      return res.status(404).json({
+        message:
+          "Order not found",
+      });
     }
-    if (req.user?.role !== 'admin' && req.user?.role !== 'vendor') {
-      return res.status(403).json({ message: 'Unauthorized: Admin or vendor access required' });
-    }
-    const order = await Order.findByIdAndUpdate(
-      req.params.id,
-      { status, updatedAt: new Date() },
-      { new: true, runValidators: true }
-    )
-      .populate('products.productId', 'name price images')
-      .populate('products.vendorId', 'name email')
-      .populate('userId', 'name email');
-    if (!order) return res.status(404).json({ message: 'Order not found' });
+
+
     res.json(order);
-  } catch (error) {
-    if (error.name === 'CastError') return res.status(400).json({ message: 'Invalid order ID format' });
-    res.status(400).json({ message: error.message });
+
+  } catch (err) {
+
+    console.error(err);
+
+    res.status(500).json({
+      message:
+        err.message,
+    });
   }
 };
 
-// Delete order
-const deleteOrder = async (req, res) => {
+
+/* =========================================
+   UPDATE ORDER STATUS
+========================================= */
+
+exports.updateOrderStatus = async (
+  req,
+  res
+) => {
+
   try {
-    if (req.user?.role !== 'admin') {
-      return res.status(403).json({ message: 'Unauthorized: Admin access required' });
+
+    const { status } =
+      req.body;
+
+    const order =
+      await Order.findById(
+        req.params.id
+      );
+
+    if (!order) {
+
+      return res.status(404).json({
+        message:
+          "Order not found",
+      });
     }
-    const order = await Order.findByIdAndDelete(req.params.id);
-    if (!order) return res.status(404).json({ message: 'Order not found' });
-    res.json({ message: 'Order deleted successfully' });
-  } catch (error) {
-    if (error.name === 'CastError') return res.status(400).json({ message: 'Invalid order ID format' });
-    res.status(500).json({ message: error.message });
+
+
+    order.status = status;
+
+
+    /* =========================================
+       STATUS LOGIC
+    ========================================= */
+
+    if (status === "accepted") {
+
+      order.liveStatus =
+        "Preparing";
+
+      order.estimatedDeliveryTime =
+        30;
+
+      order.acceptedAt =
+        new Date();
+    }
+
+
+    if (status === "preparing") {
+
+      order.liveStatus =
+        "Preparing";
+
+      order.estimatedDeliveryTime =
+        20;
+    }
+
+
+    if (
+      status ===
+      "out_for_delivery"
+    ) {
+
+      order.liveStatus =
+        "On The Way";
+
+      order.estimatedDeliveryTime =
+        10;
+
+      order.dispatchedAt =
+        new Date();
+    }
+
+
+    if (status === "delivered") {
+
+      order.liveStatus =
+        "Delivered";
+
+      order.estimatedDeliveryTime =
+        0;
+
+      order.deliveredAt =
+        new Date();
+    }
+
+
+    if (status === "cancelled") {
+
+      order.cancelledAt =
+        new Date();
+    }
+
+
+    await order.save();
+
+
+    res.json({
+
+      success: true,
+
+      message:
+        "Order status updated",
+
+      order,
+    });
+
+  } catch (err) {
+
+    console.error(err);
+
+    res.status(500).json({
+      message:
+        err.message,
+    });
   }
 };
 
-module.exports = { createOrder, getUserOrders, getOrderById, updateOrderStatus, deleteOrder };
+
+/* =========================================
+   DELETE ORDER
+========================================= */
+
+exports.deleteOrder = async (
+  req,
+  res
+) => {
+
+  try {
+
+    await Order.findByIdAndDelete(
+      req.params.id
+    );
+
+    res.json({
+      message:
+        "Order deleted",
+    });
+
+  } catch (err) {
+
+    res.status(500).json({
+      message:
+        err.message,
+    });
+  }
+};
+
+
+/* =========================================
+   UPDATE LIVE STATUS
+========================================= */
+
+exports.updateLiveStatus = async (
+  req,
+  res
+) => {
+
+  try {
+
+    const { status } =
+      req.body;
+
+    const order =
+      await Order.findById(
+        req.params.id
+      );
+
+    if (!order) {
+
+      return res.status(404).json({
+        message:
+          "Order not found",
+      });
+    }
+
+
+    order.liveStatus =
+      status;
+
+    await order.save();
+
+
+    res.json({
+
+      success: true,
+
+      order,
+    });
+
+  } catch (err) {
+
+    console.error(err);
+
+    res.status(500).json({
+      message:
+        err.message,
+    });
+  }
+};
+
+
+/* =========================================
+   PAYMENT SUCCESS
+========================================= */
+
+exports.markPaymentSuccessful =
+  async (
+    req,
+    res
+  ) => {
+
+    try {
+
+      const order =
+        await Order.findById(
+          req.params.id
+        );
+
+      if (!order) {
+
+        return res.status(404).json({
+          message:
+            "Order not found",
+        });
+      }
+
+
+      order.paymentStatus =
+        "completed";
+
+      order.status =
+        "pending";
+
+
+      await order.save();
+
+
+      res.json({
+
+        success: true,
+
+        message:
+          "Payment successful",
+
+        order,
+      });
+
+    } catch (err) {
+
+      console.error(err);
+
+      res.status(500).json({
+        message:
+          "Server Error",
+      });
+    }
+  };

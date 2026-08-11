@@ -3,9 +3,9 @@ const Deal = require('../models/Deal');
 const Product = require('../models/Product');
 const mongoose = require('mongoose');
 
-// @route   POST /api/deals
-// @desc    Create a new deal
-// @access  Private (Vendor Only)
+/* ======================================
+   CREATE DEAL (Vendor Only)
+====================================== */
 exports.createDeal = async (req, res) => {
   try {
     const {
@@ -24,6 +24,17 @@ exports.createDeal = async (req, res) => {
       categories,
       applyToAllProducts
     } = req.body;
+
+    // 🔥 FIX 1: Deal must target something
+    if (
+      !applyToAllProducts &&
+      (!products || products.length === 0) &&
+      (!categories || categories.length === 0)
+    ) {
+      return res.status(400).json({
+        message: 'Please select at least one category, product, or apply to all products'
+      });
+    }
 
     // Validate required fields
     if (!name || !dealType || !startDate || !endDate) {
@@ -59,6 +70,7 @@ exports.createDeal = async (req, res) => {
 
     const savedDeal = await deal.save();
     res.status(201).json(savedDeal);
+
   } catch (error) {
     console.error('Error creating deal:', error);
     
@@ -71,9 +83,10 @@ exports.createDeal = async (req, res) => {
   }
 };
 
-// @route   GET /api/deals
-// @desc    Get all deals for vendor
-// @access  Private (Vendor Only)
+
+/* ======================================
+   GET VENDOR DEALS
+====================================== */
 exports.getVendorDeals = async (req, res) => {
   try {
     if (req.user.role !== 'vendor') {
@@ -92,9 +105,10 @@ exports.getVendorDeals = async (req, res) => {
   }
 };
 
-// @route   GET /api/deals/:id
-// @desc    Get deal by ID
-// @access  Private (Vendor Only)
+
+/* ======================================
+   GET DEAL BY ID (Vendor)
+====================================== */
 exports.getDealById = async (req, res) => {
   try {
     const deal = await Deal.findById(req.params.id)
@@ -120,9 +134,10 @@ exports.getDealById = async (req, res) => {
   }
 };
 
-// @route   PUT /api/deals/:id
-// @desc    Update a deal
-// @access  Private (Vendor Only)
+
+/* ======================================
+   UPDATE DEAL
+====================================== */
 exports.updateDeal = async (req, res) => {
   try {
     const deal = await Deal.findById(req.params.id);
@@ -158,9 +173,10 @@ exports.updateDeal = async (req, res) => {
   }
 };
 
-// @route   DELETE /api/deals/:id
-// @desc    Delete a deal
-// @access  Private (Vendor Only)
+
+/* ======================================
+   DELETE DEAL
+====================================== */
 exports.deleteDeal = async (req, res) => {
   try {
     const deal = await Deal.findById(req.params.id);
@@ -184,9 +200,10 @@ exports.deleteDeal = async (req, res) => {
   }
 };
 
-// @route   GET /api/deals/product/:productId
-// @desc    Get active deals for a product
-// @access  Public
+
+/* ======================================
+   GET PRODUCT DEALS
+====================================== */
 exports.getProductDeals = async (req, res) => {
   try {
     const now = new Date();
@@ -210,8 +227,144 @@ exports.getProductDeals = async (req, res) => {
   }
 };
 
-// Helper function to get product categories
+
+/* ======================================
+   HELPER: PRODUCT CATEGORIES
+====================================== */
 async function getProductCategories(productId) {
   const product = await Product.findById(productId).populate('categoryId');
   return product.categoryId ? [product.categoryId._id] : [];
 }
+
+
+/* ======================================
+   GET ACTIVE DEALS
+====================================== */
+exports.getActiveDeals = async (req, res) => {
+  try {
+    const now = new Date();
+    
+    const activeDeals = await Deal.find({
+      isActive: true,
+      startDate: { $lte: now },
+      endDate: { $gte: now }
+    })
+    .populate('products', 'name price images')
+    .populate('categories', 'name')
+    .populate('comboProducts', 'name price images')
+    .sort({ createdAt: -1 })
+    .limit(20);
+
+    res.json(activeDeals);
+  } catch (error) {
+    console.error('Error fetching active deals:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+
+/* ======================================
+   GET ACTIVE DEALS WITH PRODUCTS
+====================================== */
+exports.getActiveDealsWithProducts = async (req, res) => {
+  try {
+    const now = new Date();
+
+    const deals = await Deal.find({
+      isActive: true,
+      startDate: { $lte: now },
+      endDate: { $gte: now }
+    }).lean();
+
+    const response = [];
+
+    for (const deal of deals) {
+      let products = [];
+
+      if (deal.applyToAllProducts) {
+        products = await Product.find().populate('categoryId');
+      } 
+      else if (deal.products && deal.products.length > 0) {
+        products = await Product.find({ _id: { $in: deal.products } })
+          .populate('categoryId');
+      } 
+      else if (deal.categories && deal.categories.length > 0) {
+        products = await Product.find({ categoryId: { $in: deal.categories } })
+          .populate('categoryId');
+      }
+
+      response.push({
+        ...deal,
+        products
+      });
+    }
+
+    res.json(response);
+  } catch (error) {
+    console.error('Error fetching active deals with products:', error);
+    res.status(500).json({ message: 'Failed to fetch deals with products' });
+  }
+};
+
+
+/* ======================================
+   GET PRODUCTS UNDER A DEAL (FOR FRONTEND)
+====================================== */
+exports.getDealProducts = async (req, res) => {
+  try {
+    const deal = await Deal.findById(req.params.id);
+
+    if (!deal || !deal.isActive) {
+      return res.status(404).json({ message: 'Deal not found or inactive' });
+    }
+
+    const now = new Date();
+    if (now < deal.startDate || now > deal.endDate) {
+      return res.status(400).json({ message: 'Deal expired' });
+    }
+
+    let products = [];
+
+    if (deal.applyToAllProducts) {
+      products = await Product.find({ isActive: true }).populate('categoryId');
+    } 
+    else if (deal.products && deal.products.length > 0) {
+      products = await Product.find({ _id: { $in: deal.products } }).populate('categoryId');
+    } 
+    else if (deal.categories && deal.categories.length > 0) {
+      products = await Product.find({ categoryId: { $in: deal.categories } }).populate('categoryId');
+    }
+
+    const enrichedProducts = products.map(p => {
+      let discountedPrice = p.price;
+      let savingsPercentage = 0;
+
+      if (deal.dealType === 'percentage_discount') {
+        savingsPercentage = deal.value;
+        discountedPrice = p.price - (p.price * deal.value) / 100;
+      }
+
+      if (deal.dealType === 'fixed_discount') {
+        discountedPrice = p.price - deal.value;
+        savingsPercentage = Math.round((deal.value / p.price) * 100);
+      }
+
+      return {
+        ...p.toObject(),
+        discountedPrice: Math.round(discountedPrice),
+        savingsPercentage,
+        dealEndDate: deal.endDate,
+        dealName: deal.name
+      };
+    });
+
+    res.json({
+      deal,
+      products: enrichedProducts
+    });
+
+  } catch (err) {
+    console.error('getDealProducts error:', err);
+    res.status(500).json({ message: 'Failed to fetch deal products' });
+  }
+};

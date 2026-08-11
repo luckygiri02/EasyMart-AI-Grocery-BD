@@ -1,9 +1,9 @@
 const express = require('express');
 const router = express.Router();
-const { auth } = require('../middleware/auth');
 const Category = require('../models').Category;
 
-router.get('/', auth, async (req, res) => {
+// ✅ PUBLIC ROUTE (NO AUTH)
+router.get('/', async (req, res) => {
   try {
     const categories = await Category.find().select('_id name');
     res.json(categories);
