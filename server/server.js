@@ -37,6 +37,7 @@ let dbInitializationPromise = null;
 ========================================================= */
 
 const initializeDatabase = async () => {
+  // Already connected
   if (mongoose.connection.readyState === 1) {
     if (!gridFSBucket) {
       gridFSBucket = new GridFSBucket(mongoose.connection.db, {
@@ -53,6 +54,7 @@ const initializeDatabase = async () => {
     return;
   }
 
+  // Prevent multiple simultaneous DB connections
   if (!dbInitializationPromise) {
     dbInitializationPromise = (async () => {
       await connectDB();
@@ -78,39 +80,28 @@ const initializeDatabase = async () => {
 };
 
 /* =========================================================
-   DATABASE MIDDLEWARE
-========================================================= */
-
-app.use(async (req, res, next) => {
-  try {
-    await initializeDatabase();
-    next();
-  } catch (error) {
-    console.error("Database initialization error:", error);
-
-    res.status(500).json({
-      message: "Database connection failed",
-      error:
-        process.env.NODE_ENV === "development"
-          ? error.message
-          : "Internal server error",
-    });
-  }
-});
-
-/* =========================================================
    CORS
+   IMPORTANT:
+   CORS MUST COME BEFORE DATABASE MIDDLEWARE
 ========================================================= */
 
 const allowedOrigins = [
+  // Local development
   "http://localhost:5173",
   "http://localhost:3000",
+
+  // Production frontend
+  "https://easy-mart-ai-grocery-ft.vercel.app",
+
+  // Render environment variable
   process.env.FRONTEND_URL,
 ].filter(Boolean);
 
+console.log("Allowed CORS Origins:", allowedOrigins);
+
 const corsOptions = {
   origin: function (origin, callback) {
-    // Allow requests without origin
+    // Allow requests without Origin
     // Useful for Postman/server-to-server requests
     if (!origin) {
       return callback(null, true);
@@ -122,17 +113,33 @@ const corsOptions = {
 
     console.log("Blocked CORS origin:", origin);
 
-    return callback(
-      new Error("Not allowed by CORS")
-    );
+    return callback(new Error("Not allowed by CORS"));
   },
 
   credentials: true,
 
+  methods: [
+    "GET",
+    "POST",
+    "PUT",
+    "DELETE",
+    "PATCH",
+    "OPTIONS",
+  ],
+
+  allowedHeaders: [
+    "Content-Type",
+    "Authorization",
+  ],
+
   optionsSuccessStatus: 200,
 };
 
+// CORS middleware MUST be before DB middleware
 app.use(cors(corsOptions));
+
+// Explicitly handle preflight requests
+app.options("*", cors(corsOptions));
 
 /* =========================================================
    BODY PARSERS
@@ -152,11 +159,40 @@ app.use(
 );
 
 /* =========================================================
+   DATABASE MIDDLEWARE
+========================================================= */
+
+app.use(async (req, res, next) => {
+  try {
+    await initializeDatabase();
+
+    next();
+  } catch (error) {
+    console.error(
+      "Database initialization error:",
+      error
+    );
+
+    res.status(500).json({
+      message: "Database connection failed",
+
+      error:
+        process.env.NODE_ENV === "development"
+          ? error.message
+          : "Internal server error",
+    });
+  }
+});
+
+/* =========================================================
    BASIC REQUEST LOG
 ========================================================= */
 
 app.use((req, res, next) => {
-  console.log(`${req.method} ${req.originalUrl}`);
+  console.log(
+    `${req.method} ${req.originalUrl}`
+  );
+
   next();
 });
 
@@ -198,38 +234,81 @@ app.delete(
    MAIN API ROUTES
 ========================================================= */
 
-app.use("/api/auth", authRoutes);
+app.use(
+  "/api/auth",
+  authRoutes
+);
 
-app.use("/api/products", productRoutes);
+app.use(
+  "/api/products",
+  productRoutes
+);
 
-app.use("/api/orders", orderRoutes);
+app.use(
+  "/api/orders",
+  orderRoutes
+);
 
-app.use("/api/vendors", vendorRoutes);
+app.use(
+  "/api/vendors",
+  vendorRoutes
+);
 
-app.use("/api", apiRoutes);
+app.use(
+  "/api",
+  apiRoutes
+);
 
 /*
   Categories intentionally remain PUBLIC.
   categoryRoutes.js should NOT use auth middleware
   for GET /
 */
-app.use("/api/categories", categoryRoutes);
 
-app.use("/api/brands", brandRoutes);
+app.use(
+  "/api/categories",
+  categoryRoutes
+);
 
-app.use("/api/deals", dealRoutes);
+app.use(
+  "/api/brands",
+  brandRoutes
+);
 
-app.use("/api/cart", cartRoutes);
+app.use(
+  "/api/deals",
+  dealRoutes
+);
 
-app.use("/api/addresses", addressRoutes);
+app.use(
+  "/api/cart",
+  cartRoutes
+);
 
-app.use("/api/payment", paymentRoutes);
+app.use(
+  "/api/addresses",
+  addressRoutes
+);
 
-app.use("/api/chatbot", chatbotRoutes);
+app.use(
+  "/api/payment",
+  paymentRoutes
+);
 
-app.use("/api/analytics", analyticsRoutes);
+app.use(
+  "/api/chatbot",
+  chatbotRoutes
+);
 
-app.use("/api/expiry", expiryRoutes);
+app.use(
+  "/api/analytics",
+  analyticsRoutes
+);
+
+app.use(
+  "/api/expiry",
+  expiryRoutes
+);
 
 /* =========================================================
    HEALTH CHECK
@@ -241,18 +320,27 @@ app.get("/health", async (req, res) => {
 
     res.json({
       success: true,
-      message: "EasyMart backend is healthy",
+
+      message:
+        "EasyMart backend is healthy",
+
       database:
         mongoose.connection.readyState === 1
           ? "connected"
           : "disconnected",
-      environment: process.env.NODE_ENV || "development",
+
+      environment:
+        process.env.NODE_ENV || "development",
     });
   } catch (error) {
     res.status(500).json({
       success: false,
-      message: "Backend health check failed",
-      error: error.message,
+
+      message:
+        "Backend health check failed",
+
+      error:
+        error.message,
     });
   }
 });
@@ -264,8 +352,12 @@ app.get("/health", async (req, res) => {
 app.get("/", (req, res) => {
   res.json({
     success: true,
-    message: "EasyMart Backend is running",
-    ai: "Gemma 3 4B via OpenRouter",
+
+    message:
+      "EasyMart Backend is running",
+
+    ai:
+      "Gemma 3 4B via OpenRouter",
   });
 });
 
@@ -273,49 +365,60 @@ app.get("/", (req, res) => {
    DEBUG EMAIL ROUTE
 ========================================================= */
 
-app.get("/debug/send-email", async (req, res) => {
-  /*
-    You can remove this before final production deployment.
-  */
+app.get(
+  "/debug/send-email",
+  async (req, res) => {
+    /*
+      You can remove this before final
+      production deployment.
+    */
 
-  const to =
-    req.query.to || "your-test-email@example.com";
+    const to =
+      req.query.to ||
+      "your-test-email@example.com";
 
-  const name =
-    req.query.name || "Debug User";
+    const name =
+      req.query.name ||
+      "Debug User";
 
-  const resetLink =
-    req.query.link ||
-    "https://example.com/reset?token=debugtoken";
+    const resetLink =
+      req.query.link ||
+      "https://example.com/reset?token=debugtoken";
 
-  try {
-    const result = await sendPasswordResetEmail(
-      name,
-      to,
-      resetLink
-    );
+    try {
+      const result =
+        await sendPasswordResetEmail(
+          name,
+          to,
+          resetLink
+        );
 
-    console.log(
-      "DEBUG SEND EMAIL RESULT:",
-      JSON.stringify(result, null, 2)
-    );
+      console.log(
+        "DEBUG SEND EMAIL RESULT:",
+        JSON.stringify(
+          result,
+          null,
+          2
+        )
+      );
 
-    return res.json({
-      ok: true,
-      result,
-    });
-  } catch (err) {
-    console.error(
-      "DEBUG SEND EMAIL THROW:",
-      err
-    );
+      return res.json({
+        ok: true,
+        result,
+      });
+    } catch (err) {
+      console.error(
+        "DEBUG SEND EMAIL THROW:",
+        err
+      );
 
-    return res.status(500).json({
-      ok: false,
-      error: String(err),
-    });
+      return res.status(500).json({
+        ok: false,
+        error: String(err),
+      });
+    }
   }
-});
+);
 
 /* =========================================================
    404 HANDLER
@@ -324,7 +427,9 @@ app.get("/debug/send-email", async (req, res) => {
 app.use((req, res) => {
   res.status(404).json({
     success: false,
-    message: `Route not found: ${req.method} ${req.originalUrl}`,
+
+    message:
+      `Route not found: ${req.method} ${req.originalUrl}`,
   });
 });
 
@@ -332,41 +437,53 @@ app.use((req, res) => {
    GLOBAL ERROR HANDLER
 ========================================================= */
 
-app.use((err, req, res, next) => {
-  console.error("Global server error:", err);
+app.use(
+  (err, req, res, next) => {
+    console.error(
+      "Global server error:",
+      err
+    );
 
-  res.status(500).json({
-    success: false,
-    message: "Internal server error",
-    error:
-      process.env.NODE_ENV === "development"
-        ? err.message
-        : undefined,
-  });
-});
+    res.status(500).json({
+      success: false,
+
+      message:
+        "Internal server error",
+
+      error:
+        process.env.NODE_ENV === "development"
+          ? err.message
+          : undefined,
+    });
+  }
+);
 
 /* =========================================================
    LOCAL DEVELOPMENT
 ========================================================= */
 
 if (require.main === module) {
-  const PORT = process.env.PORT || 5000;
+  const PORT =
+    process.env.PORT || 5000;
 
   initializeDatabase()
     .then(() => {
-      app.listen(PORT, () => {
-        console.log(
-          `Server running on port ${PORT}`
-        );
+      app.listen(
+        PORT,
+        () => {
+          console.log(
+            `Server running on port ${PORT}`
+          );
 
-        console.log(
-          `Health: http://localhost:${PORT}/health`
-        );
+          console.log(
+            `Health: http://localhost:${PORT}/health`
+          );
 
-        console.log(
-          `AI Test: http://localhost:${PORT}/api/ai/test`
-        );
-      });
+          console.log(
+            `AI Test: http://localhost:${PORT}/api/ai/test`
+          );
+        }
+      );
     })
     .catch((error) => {
       console.error(
